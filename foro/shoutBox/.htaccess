@@ -1,0 +1,2 @@
+RewriteEngine on
+RewriteRule ^chat/?$ ./chat/index.php [L,QSA]

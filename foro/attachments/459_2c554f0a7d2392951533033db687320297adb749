@@ -1,0 +1,977 @@
+#pragma comment (lib, "SDL.lib")
+#pragma comment (lib, "SDLmain.lib")
+#pragma comment (lib, "SDL_TTF.lib")
+
+#include <stack> // we'll use the STL stack to store our function pointers
+#include <string> // Used for any string functionality we require
+#include <vector> // An STL vector will store the game squares
+#include "time.h" // We use time(), located in "time.h" to seed our random generator
+#include "math.h" // We'll be using the abs() function located in "math.h"
+#include "SDL.h" // Main SDL header
+#include "SDL_TTF.h"// True Type Font header
+#include "Defines.h"// Our defines header
+#include "Enums.h" // Our enums header
+#include "cBlock.h"// Contains the class that represents a game block
+
+
+using namespace std;
+
+//The STL stack can't take a function pointer as a type
+//so we encapsulate a function pointer within a struct.
+struct StateStruct
+{
+	void (*StatePointer)();
+};
+
+//Global data
+stack<StateStruct>	gStateStack;		// Our state stack
+SDL_Surface*		gBitmap = NULL;		// Our background image
+SDL_Surface*		gWindow = NULL;		// Our back buffer
+cBlock*				gFocusBlock = NULL;	// The block the player is controlling
+cBlock*				gNextBlock = NULL;	// The next block to be the focus block
+SDL_Event			gEvent;				// An SDL event structure for input
+int					gTimer;				// Our timer is just an integer
+vector<cSquare*>	gOldSquares;		// The squares that no longer form the focus block
+int					gScore = 0;			// Current player score
+int					gLevel = 1;			// current level player 
+int					 gFocusBlockSpeed = INITIAL_SPEED;	// Speed of the focus block
+
+/////////////////
+// Prototypes //
+///////////////
+
+//Init and Shutdown functions
+
+void Init();
+void Shutdown();
+
+// Functions that handle the state of our game
+
+void Menu();
+void Game();
+void Exit();
+void Win();
+void Lose();
+
+//Helpers functions for the game state functions
+void CheckWin();
+void CheckLoss();
+void DrawBackground();
+void ClearScreen();
+void DisplayText(string text, int x, int y, int size, int fR, int fG,int fB, int bR, int bG, int bB);
+void HandleMenuInput();
+void HandleGameInput();
+void HandleExitInput();
+void HandleWinLoseInput();
+void HandleBottomCollision();
+void ChangeFocusBlock();
+int  CheckCompletedLines();
+bool CheckEntityCollisions(cSquare* square, Direction dir);
+bool CheckWallCollisions(cSquare* square, Direction dir);
+bool CheckEntityCollisions(cBlock* block, Direction dir);
+bool CheckWallCollisions(cBlock* block, Direction dir);
+bool CheckRotationCollisions(cBlock* block);
+
+int main(int argc, char **argv)
+{
+	Init();
+
+	//Our game loop is just a while loop that breaks when our state stack is empty.
+	while (!gStateStack.empty())
+	{
+		gStateStack.top().StatePointer();
+	}
+
+	Shutdown();
+
+	return 0;
+}
+
+//This function initializes our game.
+void Init()
+{
+	//Initialize SDL video and our timer
+	SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER);
+	// Setup our window's dimensions, bits-per-pixel (o tells sdl to choose for us),
+	// and video format (SDL_ANYFORMAT leaves the decision to sdl). This function
+	//Returns a pointer to our windows wich we assign to gWindows.
+	gWindow = SDL_SetVideoMode (WINDOW_WIDTH, WINDOW_HEIGHT, 0, SDL_ANYFORMAT);
+	// Set the title of our window.
+	SDL_WM_SetCaption(WINDOW_CAPTION, 0);
+	// Get the number of ticks since SDL was initialized
+	gTimer = SDL_GetTicks();
+
+	// Fill our bitmap structure with information.
+	gBitmap = SDL_LoadBMP("data/FallingBlocks.bmp");
+
+	// Seed our random number generator
+	srand( time(0) );
+
+	// Initialize blocks and set them to their proper locations.
+	gFocusBlock = new cBlock( BLOCK_START_X, BLOCK_START_Y, gBitmap, (BlockType)(rand()%7) );
+	gNextBlock = new cBlock( NEXT_BLOCK_CIRCLE_X, NEXT_BLOCK_CIRCLE_Y, gBitmap, (BlockType) (rand()%7) );
+
+	// We start by adding a pointer to our exit state, this way
+	// it will be the last thing the player sees of the game.
+	StateStruct state;
+	state.StatePointer = Exit;
+	gStateStack.push(state);
+
+	// Then we add a pointer to our menu state, this will
+	// be the first thing the player sees of our game.
+	state.StatePointer = Menu;
+	gStateStack.push(state);
+
+	// Initialize the true type font library
+	TTF_Init();
+}
+
+// This function shuts down our game.
+void Shutdown()
+{
+	// Get pointers to the squares in our focus and next-in-line block so we
+	// can delete them. We must do this before we delete our blocks so we
+	// don't lose references to the squares. Note that these are pointers to arrays of pointers.
+	cSquare** tempArray1 = gFocusBlock->getSquares();
+	cSquare** tempArray2 = gNextBlock->getSquares();
+
+	// Delete our blocks
+	delete gFocusBlock;
+	delete gNextBlock;
+
+	// Delete the temporary array of squares
+	for (int i=0; i<4; i++)
+	{
+		delete tempArray1[i];
+		delete tempArray2[i];
+	}
+
+	// Delete the squares that are in the game area
+	for (int i=0; i<gOldSquares.size(); i++)
+	{
+	delete gOldSquares[i];
+	}
+
+	// Shutdown the true type font library.
+	TTF_Quit();
+
+	// Free our surfaces.
+	SDL_FreeSurface(gBitmap);
+	SDL_FreeSurface(gWindow);
+
+	// Tell SDL to shutdown and free any resources it was using
+	SDL_Quit();
+}
+
+// This function handles the game's main menu. From here
+// the player can select to enter the game, or quit.
+void Menu()
+{
+	// Here we compare the difference between the current time and the last time we
+	// handled a frame. If FRAME_RATE amount of time has, it's time for a new frame.
+	if ( (SDL_GetTicks() - gTimer)>= FRAME_RATE)
+	{
+		HandleMenuInput();
+
+		// Make sure nothing from the last frame is still drawn.
+		ClearScreen();
+
+		DisplayText("Start (G)ame", 120, 120, 12, 255, 255, 255, 0, 0, 0);
+		DisplayText("(Q)uit Game", 120, 150, 12, 255, 255, 255, 0, 0, 0);
+
+		// Tell SDL to display our backbuffer. The four 0's will make SDL display the whole screen.
+		SDL_UpdateRect(gWindow,0,0,0,0);
+
+		// We've processed a frame so we now need to record the time at which we did it.
+		// This way we can compare this time with the next time our function gets called and
+		// see if enough time has passed between calls.
+		gTimer = SDL_GetTicks();
+	}
+}
+
+// This function handles the main game. we¡ll control the
+// drawing of the game as well as any necessary game logic.
+void Game()
+{
+	static int forceDownCounter = 0;
+	static int slideCounter = SLIDE_TIME;
+
+	// Here we compare the difference between the current time and the last time we
+	// handled a frame. If FRAME_RATE amount of time has, it's time for a new frame.
+	if ( (SDL_GetTicks() - gTimer) >= FRAME_RATE)
+	{
+		HandleGameInput();
+
+		forceDownCounter++;
+	if (forceDownCounter >= gFocusBlockSpeed)
+	{
+		// Always check for collisions before moving anything
+		if ( !CheckWallCollisions(gFocusBlock, DOWN) && !CheckEntityCollisions(gFocusBlock, DOWN) )
+		{
+			gFocusBlock->Move(DOWN); // move the focus block
+			forceDownCounter = 0; // reset our counter
+		}
+	}
+
+	// Check to see if focus block's bottom has hit something.
+	// If it has, we decrement our counter.
+	if (CheckWallCollisions(gFocusBlock,DOWN) || CheckEntityCollisions(gFocusBlock, DOWN))
+	{
+		slideCounter--;
+	}
+	// If there isn't a collision, we reset our counter.
+	// This is in case the player moves out of a collision.
+	else
+	{
+		slideCounter = SLIDE_TIME;
+	}
+	// If counter hits zero, we reset it and call our
+	// function that handles changing the foucs block
+	if (slideCounter == 0)
+	{
+		slideCounter = SLIDE_TIME;
+		HandleBottomCollision();
+	}
+	
+	// Make sure nothing from the last frame is still drawn.
+	ClearScreen();
+
+	//Drawn the background of our 'game'.
+	DrawBackground();
+	// Draw the focus block and next block.
+	gFocusBlock->Draw(gWindow);
+	gNextBlock->Draw(gWindow);
+
+	//Draw the old squares.
+	for (int i=0; i < gOldSquares.size(); i++)
+	{
+		gOldSquares[i]->Draw(gWindow);
+	}
+
+	//this will be passed to itoa()
+	char temp[256];
+
+	string score = "Score: ";
+	itoa(gScore,temp,10);
+	score.append(temp);
+
+	string nextScore = "Needed Score: ";
+	itoa(gLevel*POINTS_PER_LEVEL, temp, 10);
+	nextScore.append(temp);
+
+	string level = "Level: ";
+	itoa(gLevel, temp, 10);
+	level.append(temp);
+
+	DisplayText(score, SCORE_RECT_X, SCORE_RECT_Y, 10, 0, 0, 0, 255, 255,255);
+	DisplayText(nextScore, NEEDED_SCORE_RECT_X, NEEDED_SCORE_RECT_Y, 10,0, 0, 0,255, 255, 255);
+	DisplayText(level, LEVEL_RECT_X, LEVEL_RECT_Y, 10, 0, 0, 0, 255, 255,255);
+
+
+	//Tell SDL to display our backbuffer. The four 0's will make SDL display the whole screen.
+	SDL_UpdateRect(gWindow,0,0,0,0);
+
+	// We've processed a frame so we now need to record the time at which we did it.
+	// This way we can compare this time with the next time our function gets called and
+	// see if enough time has passed between calls.
+	gTimer = SDL_GetTicks();
+	}
+}
+
+// This function handles the game's exit screen. It will display
+// a message asking if the player really wants to quit.
+void Exit()
+{
+	// here we compare the difference between the current time and the alst time we
+	// handled a frame. If FRAME_RATE amount of time has, it's time for a new frame.
+	if ( (SDL_GetTicks() - gTimer) >= FRAME_RATE)
+	{
+		HandleExitInput();
+
+		// Make sure nothing from the last frame is still drawn.
+		ClearScreen();
+
+		DisplayText("Quit Game (Y or N)?", 100, 150, 12, 255, 255, 255, 0, 0,0);
+
+		// Tell SDL to display our backbuffer. The four 0's will make SDL display the whole screen.
+		SDL_UpdateRect(gWindow,0,0,0,0);
+
+		// We've processed a frame so we now need to record the time at which we did it.
+		// This way we can compare this time with the next time our function gets called and
+		// see if enough time has passed between calls.
+		gTimer = SDL_GetTicks();
+	}
+}
+
+void GameWon()
+{
+	if ( (SDL_GetTicks() - gTimer) >= FRAME_RATE )
+	{
+		HandleWinLoseInput();
+		ClearScreen();
+		DisplayText("You Win!!!", 100, 120, 12, 255, 255, 255, 0, 0,0);
+		DisplayText("Quit Game (Y or N)?", 100, 140, 12, 255, 255,255, 0, 0, 0);
+		SDL_UpdateRect(gWindow, 0, 0, 0, 0);
+		gTimer = SDL_GetTicks();
+	}
+}
+
+// Display a game over message.
+void GameLost()
+{
+	if ( (SDL_GetTicks() - gTimer) >= FRAME_RATE )
+	{
+		HandleWinLoseInput();
+		ClearScreen();
+		DisplayText("You Lose.", 100, 120, 12, 255, 255, 255, 0, 0,0);
+		DisplayText("Quit Game (Y or N)?", 100, 140, 12, 255, 255,255, 0, 0, 0);
+		SDL_UpdateRect(gWindow, 0, 0, 0, 0);
+		gTimer = SDL_GetTicks();
+	}
+}
+
+//////////////////////////
+// Rendering Functions //
+////////////////////////
+
+void DrawBackground()
+{
+	SDL_Rect source;
+	// Set our source rectangle to the current level's background
+	switch (gLevel)
+	{
+		case 1:
+			{
+				SDL_Rect temp = { LEVEL_ONE_X, LEVEL_ONE_Y, WINDOW_WIDTH,WINDOW_HEIGHT };
+				source = temp;
+			} 
+		break;
+		case 2:
+		{
+			SDL_Rect temp = { LEVEL_TWO_X, LEVEL_TWO_Y, WINDOW_WIDTH,WINDOW_HEIGHT };
+			source = temp;
+		} 
+		break;
+		case 3:
+			{
+				SDL_Rect temp = { LEVEL_THREE_X, LEVEL_THREE_Y,WINDOW_WIDTH,WINDOW_HEIGHT };
+				source = temp;
+			} 
+			break;
+		case 4:
+			{
+				SDL_Rect temp = { LEVEL_FOUR_X, LEVEL_FOUR_Y,WINDOW_WIDTH,WINDOW_HEIGHT };
+				source = temp;
+			} 
+			break;
+		case 5:
+			{
+				SDL_Rect temp = { LEVEL_FIVE_X, LEVEL_FIVE_Y,WINDOW_WIDTH,WINDOW_HEIGHT };
+				source = temp;
+			} 
+			break;
+	}
+
+	SDL_Rect destination = { 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT };
+	SDL_BlitSurface(gBitmap, &source, gWindow, &destination);
+}
+
+// This function simply clears the abck buffer to black.
+void ClearScreen()
+{
+	// This function just fills a surface with a given color. The
+	// first 0 tells SDL to fill the whole surface. the second 0
+	// is for Black.
+	SDL_FillRect(gWindow,0,0);
+}
+
+// This function displays text to the screen. It takes the text
+// to be displayed, the location to display it, the size of the
+// text, and teh color of the text and background.
+void DisplayText (string text, int x, int y, int size, int fR,int fG, int fB, int bR, int bG, int bB)
+{
+	// Open our font and set its size to the given parameter.
+	TTF_Font* font = TTF_OpenFont("arial.ttf",size);
+
+	SDL_Color foreground = {fR, fG, fB}; // Text color.
+	SDL_Color background = {bR, bG, bB}; // Color of what's behind the text.
+
+	// This renders our text to a temporary sourface. There
+	// are other text functions, but this one looks nice.
+	SDL_Surface* temp = TTF_RenderText_Shaded(font, text.c_str(), foreground, background);
+
+	// A structure storing the destination of our text.
+	SDL_Rect destination = {x,y,0,0};
+
+	//Blit the text surface to our window surface, the NULL specifies the whole surface.
+	SDL_BlitSurface(temp, NULL, gWindow, &destination);
+
+	// Always free memory!
+	SDL_FreeSurface(temp);
+
+	// Close the font.
+	TTF_CloseFont(font);
+}
+
+//////////////////////
+// Input functions //
+////////////////////
+
+// This function receives player input and
+// handles it for the game's menu screen.
+void HandleMenuInput()
+{
+	// Fill our event structure with event information.
+	if ( SDL_PollEvent(&gEvent) )
+	{
+		// Handle user manualy closing game window
+		if (gEvent.type == SDL_QUIT)
+		{
+			// While stat stack isn't empty, pop
+			while (!gStateStack.empty())
+			{
+				gStateStack.pop();
+			}
+			return; //game is over, exit the function
+		}
+
+		// Handle keyboard input here
+		if (gEvent.type == SDL_KEYDOWN)
+		{
+			if (gEvent.key.keysym.sym == SDLK_ESCAPE)
+			{
+				gStateStack.pop();
+				return; // this state is done, exit function
+			}
+			//Quit
+			if (gEvent.key.keysym.sym == SDLK_q)
+			{
+				gStateStack.pop();
+				return; // game is over, exit the function
+			}
+			// Start Game
+			if (gEvent.key.keysym.sym == SDLK_g)
+			{
+				StateStruct temp;
+				temp.StatePointer = Game;
+				gStateStack.push(temp);
+				return; //This state is done, exit the function
+			}
+		}
+	}
+}
+
+// This function receives player input and
+// handle it for the main game state.
+void HandleGameInput() 
+{
+	// These variables allow the user to hold the arrow keys down //
+	static bool down_pressed  = false;
+	static bool left_pressed  = false;
+	static bool right_pressed = false;
+
+	// Fill our event structure with event information. //
+	if ( SDL_PollEvent(&gEvent) )
+	{
+		// Handle user manually closing game window //
+		if (gEvent.type == SDL_QUIT)
+		{			
+			// While state stack isn't empty, pop //
+			while (!gStateStack.empty())
+			{
+				gStateStack.pop();
+			}
+
+			return;  // game is over, exit the function
+		}
+
+		// Handle keyboard input here //
+		if (gEvent.type == SDL_KEYDOWN)
+		{
+			if (gEvent.key.keysym.sym == SDLK_ESCAPE)
+			{
+				gStateStack.pop();
+				
+				return;  // this state is done, exit the function 
+			}	
+			
+			if (gEvent.key.keysym.sym == SDLK_UP)
+			{
+				// Check collisions before rotating //
+				if (!CheckRotationCollisions(gFocusBlock))
+				{
+					gFocusBlock->Rotate();
+				}
+			}
+
+			// For the left, right, and down arrow keys, we just set a bool variable //
+			if (gEvent.key.keysym.sym == SDLK_LEFT)
+			{
+				left_pressed = true;
+			}
+			if (gEvent.key.keysym.sym == SDLK_RIGHT)
+			{
+				right_pressed = true;
+			}
+			if (gEvent.key.keysym.sym == SDLK_DOWN)
+			{
+				down_pressed = true;
+			}
+		}
+
+		// If player lifts key, set bool variable to false //
+		if (gEvent.type == SDL_KEYUP)
+		{
+			if (gEvent.key.keysym.sym == SDLK_LEFT)
+			{
+				left_pressed = false;
+			}
+			if (gEvent.key.keysym.sym == SDLK_RIGHT)
+			{
+				right_pressed = false;
+			}
+			if (gEvent.key.keysym.sym == SDLK_DOWN)
+			{
+				down_pressed = false;
+			}
+		}
+	}
+
+	// Now we handle the arrow keys, making sure to check for collisions //
+	if (down_pressed)
+	{
+		if ( !CheckWallCollisions(gFocusBlock, DOWN) &&
+			 !CheckEntityCollisions(gFocusBlock, DOWN) )
+		{
+			gFocusBlock->Move(DOWN);
+		}
+	}
+	if (left_pressed)
+	{
+		if ( !CheckWallCollisions(gFocusBlock, LEFT) &&
+			 !CheckEntityCollisions(gFocusBlock, LEFT) )
+		{
+			gFocusBlock->Move(LEFT);
+		}
+	}
+	if (right_pressed)
+	{
+		if ( !CheckWallCollisions(gFocusBlock, RIGHT) &&
+			 !CheckEntityCollisions(gFocusBlock, RIGHT) )
+		{
+			gFocusBlock->Move(RIGHT);
+		}
+	}
+}
+
+// Input handling for win/lose screens.
+void HandleWinLoseInput()
+{
+	if ( SDL_PollEvent(&gEvent) )
+	{
+		// Handle user manually closing game window
+		if (gEvent.type == SDL_QUIT)
+		{
+			// While state stack isn't empty, pop
+			while (!gStateStack.empty())
+			{
+				gStateStack.pop();
+			}
+			return;
+		}
+		// Handle keyboard input here
+		if (gEvent.type == SDL_KEYDOWN)
+		{
+			if (gEvent.key.keysym.sym == SDLK_ESCAPE)
+			{
+				gStateStack.pop();
+				return;
+			}
+			if (gEvent.key.keysym.sym == SDLK_y)
+			{
+				gStateStack.pop();
+				return;
+			}
+			// If player chooses to continue playing, we pop off
+			// current state and push exit and menu states back on.
+			if (gEvent.key.keysym.sym == SDLK_n)
+			{
+				gStateStack.pop();
+				StateStruct temp;
+				temp.StatePointer = Exit;
+				gStateStack.push(temp);
+				temp.StatePointer = Menu;
+				gStateStack.push(temp);
+				return;
+			}
+		}
+	}
+}
+
+
+
+// This function receives player input and
+// handle it for the game's exit screen.
+void HandleExitInput()
+{
+	// Fill our event structure with event information.
+	if ( SDL_PollEvent(&gEvent) )
+	{
+		// Handle user manualy closing game window
+		if (gEvent.type == SDL_QUIT)
+		{
+			// While state stack isn't empty, pop
+			while (!gStateStack.empty())
+			{
+				gStateStack.pop();
+			}
+			return; // game is over, exit function
+		}
+
+		// Handle keyboard input here
+		if (gEvent.type == SDL_KEYDOWN)
+		{
+			if (gEvent.key.keysym.sym == SDLK_ESCAPE)
+			{
+				gStateStack.pop();
+				return; // this state is done, exit the function
+			}
+			// Yes
+			if (gEvent.key.keysym.sym == SDLK_y)
+			{
+				gStateStack.pop();
+				return; // game is over, exit the function
+			}
+			// No
+			if (gEvent.key.keysym.sym == SDLK_n)
+			{
+				StateStruct temp;
+				temp.StatePointer = Menu;
+				gStateStack.push(temp);
+				return; // this state is done, exit the function
+			}
+		}
+	}
+}
+
+void HandleBottomCollision()
+{
+	ChangeFocusBlock();
+	// Check for completed lines and store the number of lines completed
+	int numLines = CheckCompletedLines();
+	if ( numLines > 0)
+	{
+		// Increase player's score according to number of lines completed
+		gScore += POINTS_PER_LINE * numLines;
+		//Check to see if it's time for a new level
+		if (gScore >= gLevel * POINTS_PER_LEVEL)
+		{
+			gLevel++;
+			CheckWin(); // check for a win after increasing the level
+
+			gFocusBlockSpeed -= SPEED_CHANGE; //shorten the focus blocks movement interval
+		}
+	}
+	// Now would be a good time to check to see if the player has lost
+	CheckLoss();
+}
+
+// Add the squares of the focus block to gOldSquares
+// and set the next block as the focus block.
+void ChangeFocusBlock()
+{
+	// get an array of pointer to the focus block squares
+	cSquare** squareArray = gFocusBlock->getSquares();
+
+	// Add focus block squares to gOldSquares
+	for (int i=0; i<4; i++)
+	{
+		gOldSquares.push_back(squareArray[i]);
+	}
+	delete gFocusBlock; // delete the current focus block
+	gFocusBlock = gNextBlock; // set the focus block to the next block
+	gFocusBlock->SetupSquares(BLOCK_START_X,BLOCK_START_Y,gBitmap);
+	// set the next block to a new block of random type
+	gNextBlock = new cBlock(NEXT_BLOCK_CIRCLE_X,NEXT_BLOCK_CIRCLE_Y,gBitmap,(BlockType)(rand()%7));
+}
+
+// Return amount of lines clared or zero if no lines were cleared
+int CheckCompletedLines()
+{
+	// Store the amount of squares in each row in an array
+	int squaresPerRow[13];
+	// The compiler will fill the array with junk values if we don't do this
+	for (int index=0; index < 13; index++)
+	{
+		squaresPerRow[index] = 0;
+	}
+	
+	int rowSize = SQUARE_MEDIAN * 2; // pixel size of one row
+	int bottom = GAME_AREA_BOTTOM - SQUARE_MEDIAN; // center of bottom row
+	int top = bottom - (12 * rowSize); // center of top row
+	int numLines = 0; // number of lines cleared
+	int row; // multipurpose variable
+
+	// Check for full lines
+	for (int i = 0; i<gOldSquares.size(); i++)
+	{
+		// Get the row the current square is in
+		row = (gOldSquares[i]->getCenterY()-top)/rowSize;
+
+		// Increment the appropiate row counter
+		squaresPerRow[row]++;
+	}
+
+	// Erase any full lines
+	for (int line=0; line<13; line++)
+	{
+		// Check for complete lines
+		if (squaresPerRow[line] == SQUARES_PER_ROW)
+		{
+			// Keep track of how many lines have been completed
+			numLines++;
+			// Find any squares in current row and remove them
+			for (int index = 0; index < gOldSquares.size(); index++)
+			{
+				if (((gOldSquares[index]->getCenterY() - top)/rowSize) == line)
+				{
+					//delete the square
+					delete gOldSquares[index];
+					// remove it from the vector
+					gOldSquares.erase(gOldSquares.begin()+index);
+					// When we delete a square, the next square in the vector takes
+					// its place. We have to be sure to stay at the current index so
+					// we don't skip any squares. For example, if we delete the first
+					// square, the second square now becomes the first. We have to
+					// stay at the current (first) index so we can check the second
+					// square (now the first).
+					index--;
+				}
+			}
+		}
+	}
+	// Move squares above cleared line down
+	for (int index = 0; index < gOldSquares.size(); index++)
+	{
+		for (int line=0; line<13; line++)
+		{
+			// Determine if this row was filled
+			if (squaresPerRow[line] == SQUARES_PER_ROW)
+			{
+				// If it was, get the location of it within the game area
+				row = (gOldSquares[index]->getCenterY() - top)/rowSize;
+				// Now move any squares above that row down one
+				if (row < line)
+				{
+					gOldSquares[index]->Move(DOWN);
+				}
+			}
+		}
+	}
+	return numLines;
+}
+	
+
+// Check collisions between a given square and the squares in gOldSquares
+bool CheckEntityCollisions(cSquare* square, Direction dir)
+{
+	// Width/height of a square. Also the distance between two squares if they've collided.
+	int distance = SQUARE_MEDIAN * 2;
+
+	// Center of the given square
+	int centerX = square->getCenterX();
+	int centerY = square->getCenterY();
+
+	// Determine the location of the square after moving
+	switch (dir)
+	{
+		case DOWN:
+			{
+				centerY += distance;
+			}
+			break;
+		case LEFT:
+			{
+				centerX -= distance;
+			}
+			break;
+		case RIGHT:
+			{
+				centerX += distance;
+			}
+			break;
+	}
+		
+	// Iterate through the old squares vector, checking for collisions
+	for (int i=0; i< gOldSquares.size();i++)
+	{
+		if ((abs(centerX - gOldSquares[i]->getCenterX()) < distance) && (abs(centerY - gOldSquares[i]->getCenterY()) < distance))
+		{
+			return true;
+		}
+	}
+	return false;	
+}
+
+// Check collisions between a given block and the squares in gOldSquares
+bool CheckEntityCollisions(cBlock* block, Direction dir)
+{
+	// Get an array of the squares that make up the given block
+	cSquare** tempArray = block->getSquares();
+
+	// Now just call the other CheckEntityCollisions() on each square
+
+	for (int i=0; i<4; i++)
+	{
+		if (CheckEntityCollisions(tempArray[i],dir))
+			return true;
+	}
+	return false;
+}
+
+// Check collisions between a given square and the sides of the game area
+bool CheckWallCollisions(cSquare* square, Direction dir)
+{
+	// Get the center of teh squares
+	int x = square->getCenterX();
+	int y = square->getCenterY();
+
+	// Get the location of the square after moving and see if its out of bounds
+	switch (dir)
+	{
+		case DOWN:
+			{
+				if ((y + (SQUARE_MEDIAN*2)) > GAME_AREA_BOTTOM)
+				{
+					return true;
+				}
+				else
+				{
+					return false;
+				}
+			}
+			break;
+		case LEFT:
+			{
+				if ((x - (SQUARE_MEDIAN*2)) < GAME_AREA_LEFT)
+				{
+					return true;
+				}
+				else
+				{
+					return false;
+				}
+			}
+			break;
+		case RIGHT:
+			{
+				if ((x + (SQUARE_MEDIAN*2)) > GAME_AREA_RIGHT)
+				{
+					return true;
+				}
+				else
+				{
+					return false;
+				}
+			}
+			break;
+	}
+	return false;
+}
+
+// Check for collisions between a given block a the sides of the game area
+bool CheckWallCollisions(cBlock* block, Direction dir)
+{
+	// Get an array of squares that make up the given block
+	cSquare** tempArray = block->getSquares();
+
+	// Call other CheckWallCollisions() on each square
+	for (int i=0; i<4; i++)
+	{
+		if (CheckWallCollisions(tempArray[i], dir))
+			return true;
+	}
+	return false;
+}
+
+bool CheckRotationCollisions(cBlock* block)
+{
+	// Get an array of values for the locations of the rotated block's squares
+	int* tempArray = block->GetRotatedSquares();
+
+	// Distance between two touching squares
+	int distance = SQUARE_MEDIAN * 2;
+
+	for (int i=0; i<4; i++)
+	{
+		// Check to see if teh block will go out of bounds
+		if ((tempArray[i*2]<GAME_AREA_LEFT) || (tempArray[i*2] > GAME_AREA_RIGHT))
+		{
+			delete tempArray;
+			return true;
+		}
+		if (tempArray[(i*2)+1] > GAME_AREA_BOTTOM)
+		{
+			delete tempArray;
+			return true;
+		}
+		// Check to see if the block will collide with any squares
+		for (int index=0; index < gOldSquares.size(); index++)
+		{
+			if ((abs(tempArray[i*2] - gOldSquares[index]->getCenterX()) < distance) && (abs(tempArray[(i*2)+1] - gOldSquares[index]->getCenterY()) < distance))
+			{
+				delete tempArray;
+				return true;
+			}
+		}
+	}
+	delete tempArray;
+	return false;
+}
+
+// Check to see if player has won. handle winning condition if needed.
+void CheckWin()
+{
+	// If current level is greater than number of levels, player has won
+	if (gLevel > NUM_LEVELS)
+	{
+		// Pop all states
+		while (!gStateStack.empty())
+		{
+			gStateStack.pop();
+		}
+		// Push the victory state onto the stack
+		StateStruct win;
+		win.StatePointer = GameWon;
+		gStateStack.push(win);
+	}
+}
+
+void CheckLoss()
+{
+	// We call this function when the focus block is at the top of that
+	// game area. If the focus block is stuck now, the game is over
+	if (CheckEntityCollisions(gFocusBlock,DOWN))
+	{
+		// Clear the old squares vector
+		for (int i=0; i < gOldSquares.size(); i++)
+		{
+			delete gOldSquares[i];
+		}
+		gOldSquares.clear();
+		// Pop all states
+		while (!gStateStack.empty())
+		{
+			gStateStack.pop();
+		}
+		// Push the losing state onto the stack
+		StateStruct lose;
+		lose.StatePointer = GameLost;
+		gStateStack.push(lose);
+	}
+}
+
+
+
+
+
