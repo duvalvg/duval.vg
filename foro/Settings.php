@@ -38,9 +38,9 @@ $db_error_send = 0;
 
 ########## Directories/Files ##########
 # Note: These directories do not have to be changed unless you move things.
-$boarddir = '/storage/content/84/102984/duval.vg/public_html/foro';		# The absolute path to the forum's folder. (not just '.'!)
-$sourcedir = '/storage/content/84/102984/duval.vg/public_html/foro/Sources';		# Path to the Sources directory.
-$cachedir = '/storage/content/84/102984/duval.vg/public_html/foro/cache';		# Path to the cache directory.
+$boarddir = '/ruta/al/foro';		# The absolute path to the forum's folder. (not just '.'!)
+$sourcedir = '/ruta/al/Sources';		# Path to the Sources directory.
+$cachedir = '/ruta/al/foro/cache';		# Path to the cache directory.
 
 ########## Error-Catching ##########
 # Note: You shouldn't touch these settings.
