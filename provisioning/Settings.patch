@@ -1,0 +1,38 @@
+diff --git a/foro/Settings.php b/foro/Settings.php
+index 3484e40..45b3a01 100644
+--- a/foro/Settings.php
++++ b/foro/Settings.php
+@@ -20,16 +20,16 @@ $mmessage = 'El foro esta bajo mantenimiento. ¡Volveremos en breve!';		# Descri
+ ########## Forum Info ##########
+ $mbname = 'DUVAL';		# The name of your forum.
+ $language = 'spanish_es-utf8';		# The default language file set for the forum.
+-$boardurl = 'http://dev.duval.vg/foro';		# URL to your forum's folder. (without the trailing /!)
++$boardurl = 'http://localhost:8080/foro';		# URL to your forum's folder. (without the trailing /!)
+ $webmaster_email = 'soporte@duval.vg';		# Email address to send emails from. (like noreply@yourdomain.com.)
+ $cookiename = 'SMFCookie404';		# Name of the cookie to set for authentication.
+ 
+ ########## Database Info ##########
+ $db_type = 'mysql';
+ $db_server = 'localhost';
+-$db_name = 'dbname';
+-$db_user = 'dbuser';
+-$db_passwd = 'dbpass';
++$db_name = 'myduval';
++$db_user = 'myduval';
++$db_passwd = '12345678';
+ $ssi_db_user = '';
+ $ssi_db_passwd = '';
+ $db_prefix = 'smf2_';
+@@ -38,9 +38,9 @@ $db_error_send = 0;
+ 
+ ########## Directories/Files ##########
+ # Note: These directories do not have to be changed unless you move things.
+-$boarddir = '/ruta/al/foro';		# The absolute path to the forum's folder. (not just '.'!)
+-$sourcedir = '/ruta/al/Sources';		# Path to the Sources directory.
+-$cachedir = '/ruta/al/foro/cache';		# Path to the cache directory.
++$boarddir = '/vagrant/foro';		# The absolute path to the forum's folder. (not just '.'!)
++$sourcedir = 'Sources';		# Path to the Sources directory.
++$cachedir = 'cache';		# Path to the cache directory.
+ 
+ ########## Error-Catching ##########
+ # Note: You shouldn't touch these settings.
