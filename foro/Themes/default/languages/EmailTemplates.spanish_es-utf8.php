@@ -698,7 +698,7 @@ Before you can login and start using the forum, your request will be reviewed an
 			@description:
 		*/
 		'subject' => 'Respuesta a Tema: {TOPICSUBJECT}',
-		'body' => 'Se ha publicado una respuesta a un tema de {POSTERNAME} que estás observando.
+		'body' => 'Se ha publicado una respuesta de {POSTERNAME} a un tema que estás observando.
 
 Puedes ver la respuesta en: {TOPICLINK}
 
